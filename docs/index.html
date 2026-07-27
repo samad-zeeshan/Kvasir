@@ -1,0 +1,781 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kvstore, a small server that remembers things</title>
+<meta name="description" content="kvstore remembers labelled pieces of text and hands them back instantly. The real Go code runs in this page.">
+<!-- An empty inline icon, so the browser does not go looking for a favicon
+     file that is not there. No request is made for it. -->
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="kit.css">
+<style>
+/* ==========================================================================
+   Page styles for kvstore. Only kit tokens are used, so every colour pairing
+   on this page is one the kit already measured. No new colours, no url(),
+   no network.
+
+   SIGNATURE: "the drawer". The live contents of the running map, drawn as a
+   card drawer with one ruled slot per label. The slot the last command
+   touched carries a heavy brass spine. Empty slots stay ruled and visible.
+   ========================================================================== */
+
+/* ---- the prompt bar ---------------------------------------------------- */
+
+/* Three lines of caption reserved, because the longest status line this page
+   can show is the one explaining that a local file cannot load the code. */
+#kv-demo { --k-player-caption-lines: 3; }
+
+.kv-prompt {
+  gap: var(--k-s2);
+}
+
+.kv-prompt__caret {
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-md);
+  font-weight: 700;
+  color: var(--k-signal);
+  flex: none;
+}
+
+.kv-prompt__input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  min-height: 2.5rem;
+  padding: var(--k-s2) var(--k-s3);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-sm);
+  color: var(--k-ink);
+  background-color: var(--k-panel);
+  border: var(--k-bw-hair) solid var(--k-edge);
+  border-radius: var(--k-r-sm);
+}
+
+.kv-prompt__input[disabled] {
+  color: var(--k-slate);
+  background-color: var(--k-sunken);
+}
+
+.kv-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--k-s2);
+  padding: var(--k-s3) var(--k-s4);
+  background-color: var(--k-sunken);
+  border-bottom: var(--k-bw-hair) solid var(--k-rule);
+}
+
+.kv-chip {
+  min-height: 2rem;
+  padding: var(--k-s1) var(--k-s3);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  font-weight: 400;
+}
+
+/* Matches the kit's own inert-control look, so a prompt that cannot run
+   reads as inactive rather than as broken. */
+.k-player__btn[disabled] {
+  color: var(--k-slate);
+  background-color: var(--k-panel);
+  border-color: var(--k-rule);
+  cursor: default;
+}
+
+.k-player__btn[disabled]:hover { background-color: var(--k-panel); }
+
+/* ---- the stage: drawer plus transcript --------------------------------- */
+
+.kv-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--k-s5);
+}
+
+@media (min-width: 54em) {
+  .kv-stage {
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+/* ---- THE DRAWER (signature) -------------------------------------------- */
+
+.kv-drawer__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--k-s2);
+  margin-bottom: var(--k-s2);
+}
+
+.kv-drawer__count {
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  color: var(--k-slate);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The index rail: one hairline down the drawer, between the slot numbers and
+   the labels, drawn on the list itself so a touched slot paints over it the
+   way a pulled card sits proud of the drawer. */
+.kv-drawer__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: var(--k-bw-hair) solid var(--k-rule);
+  border-radius: var(--k-r-sm);
+  background-color: var(--k-panel);
+  background-image: linear-gradient(
+    to right,
+    transparent calc(3px + 2.5rem),
+    var(--k-rule) calc(3px + 2.5rem),
+    var(--k-rule) calc(4px + 2.5rem),
+    transparent calc(4px + 2.5rem)
+  );
+  overflow: hidden;
+}
+
+/* One ruled slot. The left border is always 3px and the mark column is
+   always reserved, so a slot is exactly the same height whether it is empty,
+   filled, or carrying the brass spine. Nothing on this page moves. */
+.kv-slot {
+  display: grid;
+  grid-template-columns: 2.25rem minmax(0, 7rem) minmax(0, 1fr) 6.25rem;
+  align-items: center;
+  gap: var(--k-s2);
+  min-height: 2.75rem;
+  padding: var(--k-s1) var(--k-s3) var(--k-s1) 0;
+  border-left: var(--k-bw-heavy) solid transparent;
+  border-bottom: var(--k-bw-hair) solid var(--k-rule);
+}
+
+.kv-slot:last-child { border-bottom: 0; }
+
+.kv-slot__num {
+  padding-left: var(--k-s3);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-2xs);
+  color: var(--k-slate);
+  font-variant-numeric: tabular-nums;
+}
+
+/* line-height and min-height are pinned to the same value so an empty cell
+   is exactly as tall as a full one. That is what keeps the drawer the same
+   height whether it holds nothing or eight labels. */
+.kv-slot__key {
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-sm);
+  font-weight: 700;
+  line-height: 1.6;
+  min-height: 1.6em;
+  color: var(--k-ink);
+  white-space: nowrap;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.kv-slot__val {
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-sm);
+  line-height: 1.6;
+  min-height: 1.6em;
+  color: var(--k-ink);
+  white-space: nowrap;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+/* The blank card line an empty slot shows, drawn rather than left hollow. */
+.kv-slot__rule {
+  display: block;
+  height: 0.95em;
+  border-bottom: var(--k-bw-hair) dashed var(--k-rule);
+}
+
+/* The mark says in words what the colour says, so nothing here depends on
+   colour alone. It keeps its space when it is empty. */
+.kv-slot__mark {
+  line-height: 1.2;
+  min-height: 1.2em;
+  font-family: var(--k-font-display);
+  font-size: var(--k-text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--k-track-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  color: var(--k-slate);
+}
+
+/* The heavy brass spine. The whole point of the drawer. */
+.kv-slot[data-touch="set"] {
+  border-left-color: var(--k-ember);
+  background-color: var(--k-ember-wash);
+}
+
+.kv-slot[data-touch="get"] {
+  border-left-color: var(--k-signal);
+  background-color: var(--k-signal-wash);
+}
+
+@media (max-width: 34em) {
+  .kv-slot {
+    grid-template-columns: 2.25rem minmax(0, 1fr);
+    align-items: start;
+    padding-block: var(--k-s2);
+  }
+  .kv-slot__val,
+  .kv-slot__mark { grid-column: 2; }
+}
+
+.kv-note {
+  margin: var(--k-s2) 0 0;
+  font-size: var(--k-text-xs);
+  color: var(--k-slate);
+}
+
+/* ---- transcript --------------------------------------------------------- */
+
+.kv-tape__pre {
+  margin: 0;
+  padding: var(--k-s4);
+  height: 16rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-sm);
+  line-height: 1.55;
+  color: var(--k-ink);
+  background-color: var(--k-sunken);
+  border: var(--k-bw-hair) solid var(--k-rule);
+  border-radius: var(--k-r-sm);
+  white-space: pre;
+}
+
+/* ---- misc --------------------------------------------------------------- */
+
+.kv-cmds {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--k-s1) var(--k-s4);
+  font-size: var(--k-text-sm);
+}
+
+.kv-cmds dt {
+  font-family: var(--k-font-mono);
+  font-weight: 700;
+  color: var(--k-ink);
+}
+
+.kv-cmds dd {
+  margin: 0;
+  color: var(--k-slate);
+}
+
+.kv-points {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--k-s4);
+}
+
+.kv-points li {
+  padding-left: var(--k-s4);
+  border-left: var(--k-bw-heavy) solid var(--k-signal);
+  max-width: var(--k-measure);
+}
+
+.kv-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--k-s3);
+  counter-reset: kvstep;
+}
+
+.kv-steps li {
+  display: grid;
+  grid-template-columns: 1.75rem minmax(0, 1fr);
+  gap: var(--k-s3);
+  align-items: baseline;
+}
+
+.kv-steps li::before {
+  counter-increment: kvstep;
+  content: counter(kvstep, decimal-leading-zero);
+  font-family: var(--k-font-mono);
+  font-size: var(--k-text-xs);
+  color: var(--k-ember);
+  font-weight: 700;
+}
+
+.kv-honest {
+  margin: var(--k-s4) 0 0;
+  padding: var(--k-s4);
+  background-color: var(--k-ember-wash);
+  border-left: var(--k-bw-heavy) solid var(--k-ember);
+  border-radius: 0 var(--k-r-sm) var(--k-r-sm) 0;
+  font-size: var(--k-text-sm);
+  max-width: var(--k-measure);
+}
+</style>
+<script src="data/kvstore.js"></script>
+<script src="kit.js" defer></script>
+<script src="wasm_exec.js" defer></script>
+</head>
+<body>
+
+<header class="k-hero" data-k-hero-wash>
+  <div class="k-hero__wash" data-k-wash></div>
+  <div class="k-container k-hero__inner">
+    <span class="k-hero__eyebrow">Project</span>
+    <h1 class="k-hero__title">kvstore</h1>
+    <p class="k-hero__what">It is a small server that remembers labelled pieces of text and hands any one of them straight back when a program asks for it.</p>
+    <p class="k-hero__who">For the developer whose app keeps asking the database the same question over and over.</p>
+    <div class="k-hero__meta">
+      <!-- Date: this page was built 2026-07-27. Commit fd71c7f is the repository HEAD the
+           compiled code came from (git rev-parse --short HEAD). Both recorded in data/kvstore.json. -->
+      <a class="k-badge-run" href="data/kvstore.json">
+        <span class="k-badge-run__dot"></span>
+        <span class="k-badge-run__text" data-k-badge-text>Real Go code, built 2026-07-27, commit <span class="k-badge-run__sha">fd71c7f</span></span>
+      </a>
+      <button class="k-theme-toggle" type="button" data-k-theme-toggle>
+        Theme: <span data-k-theme-label>Auto</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main class="k-container">
+
+  <!-- ================================================================= -->
+  <section class="k-section">
+    <h2 class="k-section__title">The database keeps answering the same question</h2>
+    <p class="k-section__lede">It is Tuesday afternoon and one page on your site has gone slow. You open the log and find the same lookup on every single visit: fetch this customer's display name. The name has not changed in weeks. The database is asked again anyway, and every visitor waits while the answer comes off a disk.</p>
+    <p>kvstore is the thing you put in front of that question. It holds the answer in memory, ready, and hands it back without touching a disk at all.</p>
+  </section>
+
+  <!-- ================================================================= -->
+  <section class="k-section">
+    <h2 class="k-section__title">Type a command and it answers before you lift your finger</h2>
+    <p class="k-section__lede">This is not a video and not a recording. The storage code from this repository was compiled and shipped along with this page, and it is running in your browser tab. Type whatever you like into the box.</p>
+
+    <div class="k-player" id="kv-demo">
+
+      <form class="k-player__bar kv-prompt" id="kv-form" autocomplete="off">
+        <label class="k-sr-only" for="kv-input">Type a command for kvstore</label>
+        <span class="kv-prompt__caret" aria-hidden="true">&gt;</span>
+        <input class="kv-prompt__input" id="kv-input" type="text" value="SET name alice" spellcheck="false" autocapitalize="off" autocorrect="off">
+        <button class="k-player__btn k-player__btn--primary" id="kv-run" type="submit">Run it</button>
+      </form>
+
+      <div class="kv-chips">
+        <span class="k-label">Or try</span>
+        <button class="k-player__btn kv-chip" type="button" data-kv-cmd="GET name">GET name</button>
+        <button class="k-player__btn kv-chip" type="button" data-kv-cmd="SET city vancouver">SET city vancouver</button>
+        <button class="k-player__btn kv-chip" type="button" data-kv-cmd="GET nothing">GET nothing</button>
+        <button class="k-player__btn kv-chip" type="button" data-kv-cmd="DEL name">DEL name</button>
+        <button class="k-player__btn kv-chip" type="button" data-kv-cmd="PING">PING</button>
+      </div>
+
+      <div class="k-player__stage kv-stage">
+
+        <div class="kv-drawer">
+          <div class="kv-drawer__head">
+            <span class="k-label">The drawer, live contents of the map</span>
+            <span class="kv-drawer__count" id="kv-count">0 labels stored</span>
+          </div>
+          <!-- Eight slots is a drawing decision for this page, not a limit in the
+               code. store/store.go holds a plain Go map with no fixed size. -->
+          <ul class="kv-drawer__list" id="kv-drawer" aria-label="Labels currently held in the store">
+            <li class="kv-slot" data-touch="none"><span class="kv-slot__num">01</span><span class="kv-slot__key"></span><span class="kv-slot__val"><span class="kv-slot__rule"></span><span class="k-sr-only">empty</span></span><span class="kv-slot__mark"></span></li>
+            <li class="kv-slot" data-touch="none"><span class="kv-slot__num">02</span><span class="kv-slot__key"></span><span class="kv-slot__val"><span class="kv-slot__rule"></span><span class="k-sr-only">empty</span></span><span class="kv-slot__mark"></span></li>
+            <li class="kv-slot" data-touch="none"><span class="kv-slot__num">03</span><span class="kv-slot__key"></span><span class="kv-slot__val"><span class="kv-slot__rule"></span><span class="k-sr-only">empty</span></span><span class="kv-slot__mark"></span></li>
+            <li class="kv-slot" data-touch="none"><span class="kv-slot__num">04</span><span class="kv-slot__key"></span><span class="kv-slot__val"><span class="kv-slot__rule"></span><span class="k-sr-only">empty</span></span><span class="kv-slot__mark"></span></li>
+            <li class="kv-slot" data-touch="none"><span class="kv-slot__num">05</span><span class="kv-slot__key"></span><span class="kv-slot__val"><span class="kv-slot__rule"></span><span class="k-sr-only">empty</span></span><span class="kv-slot__mark"></span></li>
+            <li class="kv-slot" data-touch="none"><span class="kv-slot__num">06</span><span class="kv-slot__key"></span><span class="kv-slot__val"><span class="kv-slot__rule"></span><span class="k-sr-only">empty</span></span><span class="kv-slot__mark"></span></li>
+            <li class="kv-slot" data-touch="none"><span class="kv-slot__num">07</span><span class="kv-slot__key"></span><span class="kv-slot__val"><span class="kv-slot__rule"></span><span class="k-sr-only">empty</span></span><span class="kv-slot__mark"></span></li>
+            <li class="kv-slot" data-touch="none"><span class="kv-slot__num">08</span><span class="kv-slot__key"></span><span class="kv-slot__val"><span class="kv-slot__rule"></span><span class="k-sr-only">empty</span></span><span class="kv-slot__mark"></span></li>
+          </ul>
+          <p class="kv-note">Every line here is read back out of the running map, one label per slot. The drawer draws the first eight labels. The map has no fixed number of slots, it grows until the machine runs out of memory.</p>
+        </div>
+
+        <div class="kv-tape">
+          <div class="kv-drawer__head">
+            <span class="k-label">Everything sent, and what came back</span>
+          </div>
+          <pre class="kv-tape__pre" id="kv-tape" tabindex="0" aria-label="Transcript of commands and replies">Waiting for the first command.</pre>
+          <dl class="kv-cmds kv-note">
+            <dt>SET</dt><dd>SET label value, remember this value under this label</dd>
+            <dt>GET</dt><dd>GET label, hand back what is stored there</dd>
+            <dt>DEL</dt><dd>DEL label, forget it</dd>
+          </dl>
+        </div>
+
+      </div>
+
+      <p class="k-player__caption" id="kv-status">Loading the compiled Go code.</p>
+      <p class="k-sr-only" id="kv-live" role="status" aria-live="polite" aria-atomic="true"></p>
+    </div>
+    <p class="k-player__hint">If you opened this file by double clicking it, the prompt stays inactive: browsers refuse to load compiled code from a local file. Open the published page, or serve this folder over http, and it comes alive. Either way a session captured from the real server is shown instead.</p>
+
+    <p class="kv-honest">One part is missing on purpose. A browser tab has no network sockets, so the piece that listens for connections is not here. What runs in your tab is the storage code and the command reader, exactly as they are in the repository. The listener, and the one small worker it starts per visitor, only exist when you run the real program on a machine.</p>
+  </section>
+
+  <!-- ================================================================= -->
+  <section class="k-section">
+    <h2 class="k-section__title">Nothing touched a disk, and you could read every line you typed</h2>
+    <ul class="kv-points">
+      <!-- 27 billionths of a second: bench/RESULTS.md, section "The store and its lock,
+           on its own", BenchmarkGet at 26.93 ns/op, median of three runs of
+           go test -bench=. -benchmem -benchtime=3s -count=3 ./store -->
+      <li>Your answer came back with no disk in the way. The value sits in memory, and one lookup in the map costs about 27 billionths of a second on the machine that measured it.</li>
+      <!-- One line in, one line out: README.md "Protocol" section, and
+           protocol/protocol.go, where every reply function returns a single line. -->
+      <li>You typed a line a person can read, and got a line a person can read. The whole conversation is one line in and one line out, which is why the real server can be driven from an ordinary terminal window with no special client.</li>
+      <!-- 13 cases: protocol/protocol_test.go, TestParse table has 13 entries. -->
+      <li>When you got it wrong it said so, calmly, and carried on. The code that decided <span class="k-mono">PING</span> was not a command is the same code the real server runs, and it has 13 cases of its own in <span class="k-mono">protocol/protocol_test.go</span>.</li>
+    </ul>
+  </section>
+
+  <!-- ================================================================= -->
+  <section class="k-section">
+    <h2 class="k-section__title">A hundred thousand answers a second, on one desktop, measured seven times</h2>
+    <p class="k-section__lede">These come from <span class="k-mono">bench/RESULTS.md</span> in this repository, which records the machine, the method and the wobble between runs next to every figure. The numbers below are from the harder of the two setups in that file, the one it calls the honest configuration.</p>
+
+    <div class="k-claim-strip">
+      <div class="k-claim">
+        <!-- 107,783 ops/sec: bench/RESULTS.md, cross-process table, row "get 32". -->
+        <span class="k-claim__value">107,783<span class="k-claim__unit">answers a second</span></span>
+        <span class="k-claim__label">with 32 programs all reading at once</span>
+        <span class="k-claim__source">
+          <b>Source:</b> bench/RESULTS.md, cross-process table, measured 2026-07-27 on an AMD Ryzen 5 7600X3D, 6 cores and 12 threads, running Windows 11.
+          <b>Method:</b> the server and the asking programs run separately on that one machine and talk over its loopback (the machine talking to itself). Each asker waits for its answer before asking again. The cell was run 7 times and the middle result is reported. Fastest and slowest differed by 10.1%.
+        </span>
+      </div>
+      <div class="k-claim">
+        <!-- 880 microseconds p99: bench/RESULTS.md, cross-process table, row "get 32", p99 column. -->
+        <span class="k-claim__value">880<span class="k-claim__unit">millionths of a second</span></span>
+        <span class="k-claim__label">the slowest 1 answer in every 100, at that same rate</span>
+        <span class="k-claim__source">
+          <b>Source:</b> bench/RESULTS.md, same row as the figure on the left, 2026-07-27.
+          <b>Method:</b> every round trip was timed with a clock the harness checks and prints, then sorted. This is the value 99 out of 100 answers beat. It is under a thousandth of a second.
+        </span>
+      </div>
+      <div class="k-claim">
+        <!-- 0.4%: bench/RESULTS.md, "What the numbers actually settled", finding 1:
+             8.6us of budget per operation, 27ns spent in the store, under 0.4%. -->
+        <span class="k-claim__value">0.4<span class="k-claim__unit">percent</span></span>
+        <span class="k-claim__label">of each answer's time is spent in the storage code</span>
+        <span class="k-claim__source">
+          <b>Source:</b> bench/RESULTS.md, finding 1, 2026-07-27.
+          <b>Method:</b> at the measured rate the server has 8.6 millionths of a second to produce one answer and spends 27 billionths of it looking in the map. The rest goes on moving bytes over the connection.
+        </span>
+      </div>
+    </div>
+
+    <div class="k-io" style="margin-top: var(--k-s6);">
+      <div class="k-io__side k-io__side--in">
+        <span class="k-io__label">Sent to the real server</span>
+        <!-- Captured 2026-07-27 from cmd/kvstore listening on 127.0.0.1:7911, driven by a
+             scripted client over a real connection. Stored in data/kvstore.json. -->
+<pre class="k-io__pre">SET name alice
+GET name
+SET greeting hello there friend
+GET greeting
+GET nothing
+DEL name
+GET name
+PING
+GET</pre>
+        <p class="k-io__note">All nine lines of a session captured on 2026-07-27.</p>
+      </div>
+      <div class="k-io__side k-io__side--out">
+        <span class="k-io__label">What it wrote back</span>
+<pre class="k-io__pre">OK
+alice
+OK
+hello there friend
+(nil)
+1
+(nil)
+ERR unknown command "PING"
+ERR GET takes exactly one key</pre>
+        <p class="k-io__note">Exactly the bytes the server sent, in order. Not from this page: the real program was running and a client talked to it over a connection.</p>
+      </div>
+    </div>
+
+    <div class="k-ba" style="margin-top: var(--k-s6);">
+      <div class="k-ba__col k-ba__col--before">
+        <span class="k-ba__label">Before the measuring</span>
+        <div class="k-ba__body"><p>A note in <span class="k-mono">store/store.go</span> said that splitting the lock into pieces was not worth the complexity until a measurement showed the lock was busy. That was an opinion, written by the person who also wrote the lock.</p></div>
+      </div>
+      <div class="k-ba__col k-ba__col--after">
+        <span class="k-ba__label">After the measuring</span>
+        <!-- Under 0.4%: bench/RESULTS.md finding 1. The store.go comment now cites it. -->
+        <div class="k-ba__body"><p>The measurement exists now and says the lock is idle: under 0.4% of the time spent on an answer. The complicated version was not built, and the note in the file points at the numbers instead of at a hunch.</p></div>
+      </div>
+    </div>
+
+    <!-- 28 results, 15 test functions, 0 failures: go test -v -count=1 ./... run on
+         2026-07-27 across store/store_test.go, server/server_test.go,
+         protocol/protocol_test.go and cmd/kvstore-web/main_test.go. -->
+    <p style="margin-top: var(--k-s6); max-width: var(--k-measure);">The tests that back this are in the repository and run in a few seconds: 15 test functions reporting 28 results, none of them failing, on 2026-07-27. Several of them open real connections to a real server and talk to it from eight programs at once.</p>
+  </section>
+
+  <!-- ================================================================= -->
+  <section class="k-section">
+    <h2 class="k-section__title">It forgets everything the moment it stops</h2>
+    <div class="k-limits">
+      <h3 class="k-limits__title">What this does not do</h3>
+      <p class="k-limits__lede">Written down here so nobody has to discover it later.</p>
+      <ul class="k-limits__list">
+        <!-- store/store.go holds only a map and a lock. There is no file, no disk write,
+             and no load path anywhere in the repository. -->
+        <li>It never writes anything down. Stop the program and every label it held is gone. There is no save file and no way to reload one.</li>
+        <!-- No eviction, no size cap and no limit in store/store.go. -->
+        <li>It holds only what fits in the machine's memory. Nothing is thrown out to make room, so a large enough pile of labels will run the machine out of memory.</li>
+        <!-- server/server.go opens one listener. There is no second copy and no
+             replication anywhere in the repository. -->
+        <li>It runs on one machine. There is no second copy keeping up, so if that machine goes away the answers go with it.</li>
+        <!-- protocol/protocol.go: ReplyNil returns "(nil)" and ReplyValue returns the value,
+             so a value that is literally "(nil)" is indistinguishable from a miss.
+             Called out in README.md under "Protocol". -->
+        <li>A label whose value is literally the text <span class="k-mono">(nil)</span> reads exactly like a label that was never set. That is the price of a protocol a person can read, and it is written down in the repository too.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================================================================= -->
+  <section class="k-section">
+    <h2 class="k-section__title">Five files do the whole job</h2>
+    <ol class="kv-steps">
+      <li><span><a href="https://github.com/samad-zeeshan/Kvasir/blob/main/cmd/kvstore/main.go">cmd/kvstore/main.go</a> starts the program, picks the port and stops it cleanly when you press Ctrl and C.</span></li>
+      <li><span><a href="https://github.com/samad-zeeshan/Kvasir/blob/main/server/server.go">server/server.go</a> waits for programs to connect, and gives each one its own small worker so a slow visitor never blocks anyone else.</span></li>
+      <li><span><a href="https://github.com/samad-zeeshan/Kvasir/blob/main/protocol/protocol.go">protocol/protocol.go</a> reads one line of text and decides what it means, or says clearly that it means nothing.</span></li>
+      <li><span><a href="https://github.com/samad-zeeshan/Kvasir/blob/main/store/store.go">store/store.go</a> is the memory itself: labels pointing at values, with one lock so two writers never clash. This file and the one above it are what runs in your tab.</span></li>
+      <li><span><a href="https://github.com/samad-zeeshan/Kvasir/blob/main/bench/main.go">bench/main.go</a> is the measuring harness, and <a href="https://github.com/samad-zeeshan/Kvasir/blob/main/bench/RESULTS.md">bench/RESULTS.md</a> is what it found, caveats included.</span></li>
+    </ol>
+    <p class="kv-note" style="margin-top: var(--k-s5);">The whole project is the Go standard library and nothing else. No downloaded packages.</p>
+  </section>
+
+</main>
+
+<footer class="k-footer">
+  <div class="k-container k-footer__row">
+    <ul class="k-footer__links">
+      <li><a href="https://github.com/samad-zeeshan/Kvasir">Repository</a></li>
+      <li><a href="data/kvstore.json">Build details and captured session</a></li>
+      <li><a href="https://github.com/samad-zeeshan/Kvasir/blob/main/bench/RESULTS.md">Full measurements</a></li>
+    </ul>
+    <span class="k-format-badge">Type a command, get a real answer</span>
+    <span class="k-footer__date">Page built 2026-07-27</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var form   = document.getElementById("kv-form");
+  var input  = document.getElementById("kv-input");
+  var runBtn = document.getElementById("kv-run");
+  var tape   = document.getElementById("kv-tape");
+  var status = document.getElementById("kv-status");
+  var live   = document.getElementById("kv-live");
+  var count  = document.getElementById("kv-count");
+  var slots  = document.querySelectorAll("#kv-drawer .kv-slot");
+  var chips  = document.querySelectorAll("[data-kv-cmd]");
+
+  var ready = false;
+  var lines = [];
+
+  /* ---- the drawer ------------------------------------------------------ */
+
+  function paintDrawer(rows, touched, verb) {
+    rows = rows || [];
+    for (var i = 0; i < slots.length; i++) {
+      var slot = slots[i];
+      var keyEl = slot.querySelector(".kv-slot__key");
+      var valEl = slot.querySelector(".kv-slot__val");
+      var mark  = slot.querySelector(".kv-slot__mark");
+      var row   = rows[i];
+
+      if (!row) {
+        keyEl.textContent = "";
+        valEl.innerHTML = "<span class=\"kv-slot__rule\"></span>" +
+                          "<span class=\"k-sr-only\">empty</span>";
+        slot.setAttribute("data-touch", "none");
+        mark.textContent = "";
+        slot.setAttribute("aria-label", "Slot " + (i + 1) + ", empty");
+        continue;
+      }
+
+      keyEl.textContent = row.key;
+      valEl.textContent = row.value === "" ? "(empty text)" : row.value;
+
+      var hit = touched && row.key === touched;
+      if (hit && verb === "SET") {
+        slot.setAttribute("data-touch", "set");
+        mark.textContent = "just written";
+      } else if (hit && verb === "GET") {
+        slot.setAttribute("data-touch", "get");
+        mark.textContent = "just read";
+      } else {
+        slot.setAttribute("data-touch", "none");
+        mark.textContent = "";
+      }
+
+      slot.setAttribute("aria-label",
+        "Slot " + (i + 1) + ", label " + row.key + ", value " + row.value +
+        (mark.textContent ? ", " + mark.textContent : ""));
+    }
+
+    var n = rows.length;
+    count.textContent = n === 1 ? "1 label stored" : n + " labels stored";
+  }
+
+  /* ---- the transcript -------------------------------------------------- */
+
+  function tapePush(command, reply) {
+    lines.push("> " + command);
+    lines.push(reply);
+    if (lines.length > 200) { lines = lines.slice(lines.length - 200); }
+    tape.textContent = lines.join("\n");
+    tape.scrollTop = tape.scrollHeight;
+  }
+
+  /* ---- running a command ----------------------------------------------- */
+
+  function run(line) {
+    if (!ready) { return; }
+    line = String(line == null ? "" : line);
+    if (line.replace(/\s/g, "") === "") { return; }
+
+    var res = window.kvstoreEval(line);
+    var reply = String(res.reply || "").replace(/\n$/, "");
+
+    tapePush(line, reply);
+    paintDrawer(res.rows, res.touched, res.verb);
+
+    /* The caption has a reserved height. Keep the line inside it. */
+    var shown = reply.length > 96 ? reply.slice(0, 96) + "..." : reply;
+    status.textContent = "kvstore replied: " + shown;
+    live.textContent = "Sent " + line + ". kvstore replied " + shown + ".";
+  }
+
+  form.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var hadFocus = document.activeElement === input;
+    run(input.value);
+    if (hadFocus) { input.select(); }
+  });
+
+  for (var c = 0; c < chips.length; c++) {
+    chips[c].addEventListener("click", function (ev) {
+      var cmd = ev.currentTarget.getAttribute("data-kv-cmd");
+      input.value = cmd;
+      run(cmd);
+    });
+  }
+
+  function setEnabled(on) {
+    input.disabled = !on;
+    runBtn.setAttribute("aria-disabled", on ? "false" : "true");
+    runBtn.disabled = !on;
+    for (var i = 0; i < chips.length; i++) {
+      chips[i].setAttribute("aria-disabled", on ? "false" : "true");
+      chips[i].disabled = !on;
+    }
+  }
+
+  setEnabled(false);
+
+  /* ---- the stored session, shown when the compiled code cannot load ----- */
+
+  function showStored(why) {
+    status.textContent = why;
+    live.textContent = why;
+
+    Kit.loadData("kvstore", "data/kvstore.json").then(function (data) {
+      var cap = data && data.captured_session;
+      if (!cap) { return; }
+      var ls = cap.lines || [];
+      for (var i = 0; i < ls.length; i++) {
+        lines.push("> " + ls[i].command);
+        lines.push(ls[i].reply);
+      }
+      tape.textContent = lines.join("\n");
+      paintDrawer(cap.final_state || [], "", "");
+    })["catch"](function (err) {
+      tape.textContent = "The stored session could not be read either.";
+      if (window.console) { window.console.error(err); }
+    });
+  }
+
+  /* ---- load the compiled code ------------------------------------------ */
+
+  function boot() {
+    if (typeof window.WebAssembly !== "object" || typeof window.Go !== "function") {
+      showStored("This browser cannot run the compiled code, so a session captured from the real server on 2026-07-27 is shown instead.");
+      return;
+    }
+
+    var onFile = false;
+    try { onFile = window.location.protocol === "file:"; } catch (e) { onFile = true; }
+
+    if (onFile) {
+      showStored("Opened as a local file, so the compiled code cannot load. Below is a session captured from the real server on 2026-07-27.");
+      return;
+    }
+
+    var go = new window.Go();
+
+    window.kvstoreOnReady = function () {
+      ready = true;
+      setEnabled(true);
+      status.textContent = "Ready. The Go code from this repository is running in this tab. Press Run it.";
+      paintDrawer([], "", "");
+    };
+
+    /* Streaming first, a plain fetch second, for servers that send the wrong
+       content type for a .wasm file. */
+    function plain() {
+      return fetch("kvstore.wasm").then(function (res) {
+        if (!res.ok) { throw new Error("HTTP " + res.status); }
+        return res.arrayBuffer();
+      }).then(function (buf) {
+        return WebAssembly.instantiate(buf, go.importObject);
+      });
+    }
+
+    var attempt;
+    if (typeof WebAssembly.instantiateStreaming === "function") {
+      attempt = WebAssembly.instantiateStreaming(fetch("kvstore.wasm"), go.importObject)["catch"](plain);
+    } else {
+      attempt = plain();
+    }
+
+    attempt.then(function (result) {
+      go.run(result.instance);
+    })["catch"](function (err) {
+      if (window.console) { window.console.error(err); }
+      showStored("The compiled code did not load here, so a session captured from the real server on 2026-07-27 is shown instead.");
+    });
+  }
+
+  if (document.readyState === "complete") {
+    boot();
+  } else {
+    window.addEventListener("load", boot);
+  }
+})();
+</script>
+</body>
+</html>
