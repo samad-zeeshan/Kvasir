@@ -78,6 +78,29 @@ against the store and concurrent TCP clients against a live server, and the
 whole suite passes under the race detector. Note that -race needs cgo, so on
 Windows you need a gcc on the path.
 
+## Benchmarks
+
+```
+go run ./bench                       spawns a server in-process and sweeps it
+go run ./bench -addr host:port       loads a server you started yourself
+```
+
+Closed loop, so each client waits for its reply before sending again and the
+percentiles are round trips somebody would actually feel. Every cell is run
+several times and the median is reported next to its spread. `-clients`,
+`-ops`, `-keys`, `-valsize`, `-runs`, and `-workloads` are all flags.
+
+Committed numbers and the full method are in [bench/RESULTS.md](bench/RESULTS.md).
+The short version, measured on a 6 core Ryzen over loopback with the server in
+its own process: **over 100,000 ops/sec at 32 concurrent clients with p99 under
+900µs**, saturating between 32 and 64 clients.
+
+The design notes below used to say the lock was probably not worth sharding.
+The benchmark settled it: the store answers a read in about 27ns, which is
+under 0.4% of the per-operation budget at the rate the server actually
+achieves. Nearly all of the cost is the socket, and specifically the reply
+write, which is the next thing worth fixing.
+
 ## Layout
 
 ```
@@ -86,6 +109,7 @@ cmd/kvstore-web   browser demo console, a TCP client behind an HTTP handler
 server            TCP listener, connection handling, shutdown
 protocol          text line in, command out, replies back to text
 store             the map and its lock, behind an interface
+bench             load harness, closed loop, percentiles and throughput
 ```
 
 The server only knows the store interface, so the locking strategy can change

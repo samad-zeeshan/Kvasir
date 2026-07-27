@@ -16,6 +16,11 @@ type Store interface {
 // MemoryStore guards a plain map with one RWMutex, reads run concurrently
 // and only writes serialize. Sharding would cut write contention but is
 // not worth the complexity until a benchmark says this lock is hot.
+//
+// The benchmark now exists and says it is cold. A read costs about 27ns
+// here against roughly 8.6us of per-operation budget at the throughput
+// the server actually reaches, so under 0.4% of the cost is in this
+// file. See bench/RESULTS.md. Sharding stays unbuilt on purpose.
 type MemoryStore struct {
 	mu   sync.RWMutex
 	data map[string]string
