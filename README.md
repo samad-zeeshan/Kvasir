@@ -35,6 +35,22 @@ GET name
 
 Telnet or PowerShell's TcpClient work the same way.
 
+## How it works
+
+A client sends one text line over TCP, a goroutine for that connection parses it, runs it against a locked in-memory map, and writes one line back.
+
+![System overview](docs/diagrams/overview.png)
+TCP clients reach the accept loop, each connection gets its own goroutine, and storage sits behind a small interface.
+
+![SET then GET over one TCP connection](docs/diagrams/main-flow.png)
+A numbered trace of `SET name alice` then `GET name` from the client socket to the map and back.
+
+![Life of one client connection](docs/diagrams/states.png)
+How a connection is admitted, serves lines, recovers from a bad command, and is closed by the client or by shutdown.
+
+Interactive versions with pan, zoom and theme switch: `docs/diagrams/overview.html`, `docs/diagrams/main-flow.html`, `docs/diagrams/states.html`
+
+
 ## Browser demo
 
 There is a small web console for showing the server to someone without a
